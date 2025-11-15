@@ -36,12 +36,16 @@ jobs:
       env:
         REACT_APP_SERVER_URL: ${{ secrets.REACT_APP_SERVER_URL || 'http://localhost:5000' }}
         
+    - name: Prepare docs folder
+      run: |
+        mkdir -p docs
+        cp -r client/build/* docs/
+        
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./client/build
-        destination_dir: ./docs
+        publish_dir: ./docs
         cname: ''
         force_orphan: true
 
