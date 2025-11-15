@@ -91,21 +91,18 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
   }, [STUN_SERVERS]); // Removed localStream dependency - use ref instead
 
   useEffect(() => {
-    // Initialize socket connection (only once)
-    // Don't recreate if socket already exists and is connected
-    if (socketRef.current && socketRef.current.connected) {
-      console.log('Socket already connected, skipping reconnection');
-      return;
-    }
-
+    // Initialize socket connection (only once per room/user combination)
     const serverUrl = getServerUrl();
-    console.log('Connecting to server:', serverUrl);
+    console.log('Setting up socket for room:', roomId, 'user:', userName);
     
-    // Disconnect existing socket if any
+    // Clean up any existing socket
     if (socketRef.current) {
+      console.log('Cleaning up existing socket');
+      socketRef.current.removeAllListeners();
       socketRef.current.disconnect();
     }
     
+    // Create new socket connection
     socketRef.current = io(serverUrl, getSocketOptions());
 
     const socket = socketRef.current;
@@ -147,8 +144,22 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
         alert('Could not access camera/microphone. Please check permissions.');
       });
 
-    // Join room
-    socket.emit('join-room', roomId, userIdRef.current, userName);
+    // Join room (wait for connection first)
+    const joinRoom = () => {
+      if (socket.connected) {
+        socket.emit('join-room', roomId, userIdRef.current, userName);
+        console.log('✅ Joined room:', roomId, 'as', userName);
+      } else {
+        console.log('⏳ Waiting for connection before joining room...');
+        socket.once('connect', () => {
+          socket.emit('join-room', roomId, userIdRef.current, userName);
+          console.log('✅ Joined room after connect:', roomId);
+        });
+      }
+    };
+
+    // Try to join immediately or wait for connection
+    joinRoom();
 
     // Handle existing users
     socket.on('existing-users', async (users: Array<{userId: string, userName: string, socketId: string}>) => {
