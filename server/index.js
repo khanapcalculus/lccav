@@ -49,8 +49,11 @@ const io = socketIo(server, {
       }
     },
     methods: ["GET", "POST"],
-    credentials: true
-  }
+    credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization"]
+  },
+  transports: ['websocket', 'polling'],
+  allowEIO3: true
 });
 
 // Configure CORS for Express

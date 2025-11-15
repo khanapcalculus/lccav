@@ -44,6 +44,18 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
     return process.env.REACT_APP_SERVER_URL || 'http://localhost:5000';
   };
 
+  const getSocketOptions = () => {
+    return {
+      transports: ['websocket', 'polling'], // Try websocket first, fallback to polling
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      timeout: 20000,
+      forceNew: false,
+      withCredentials: true
+    };
+  };
+
   const createPeerConnection = useCallback((socketId: string): RTCPeerConnection => {
     const peerConnection = new RTCPeerConnection(STUN_SERVERS);
 
@@ -80,11 +92,33 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
   useEffect(() => {
     // Initialize socket connection (only once)
     const serverUrl = getServerUrl();
-    socketRef.current = io(serverUrl);
+    console.log('Connecting to server:', serverUrl);
+    socketRef.current = io(serverUrl, getSocketOptions());
 
     const socket = socketRef.current;
     // Capture refs for cleanup
     const connectionsRef = peerConnectionsRef;
+
+    // Add connection event handlers
+    socket.on('connect', () => {
+      console.log('✅ Socket connected:', socket.id);
+    });
+
+    socket.on('disconnect', (reason) => {
+      console.log('❌ Socket disconnected:', reason);
+    });
+
+    socket.on('connect_error', (error) => {
+      console.error('❌ Socket connection error:', error);
+    });
+
+    socket.on('reconnect', (attemptNumber) => {
+      console.log('✅ Socket reconnected after', attemptNumber, 'attempts');
+    });
+
+    socket.on('reconnect_error', (error) => {
+      console.error('❌ Socket reconnection error:', error);
+    });
 
     // Get user media
     navigator.mediaDevices.getUserMedia({ video: true, audio: true })
