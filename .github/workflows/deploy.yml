@@ -39,7 +39,8 @@ jobs:
     - name: Prepare docs folder
       run: |
         mkdir -p docs
-        cp -r client/build/* docs/
+        cp -r client/build/. docs/
+        ls -la docs/
         
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
