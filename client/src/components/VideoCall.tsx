@@ -19,6 +19,7 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
   const [isVideoOn, setIsVideoOn] = useState(true);
   const [isAudioOn, setIsAudioOn] = useState(true);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const screenStreamRef = useRef<MediaStream | null>(null);
   const [chatMessages, setChatMessages] = useState<Array<{userId: string, userName: string, message: string, timestamp: string}>>([]);
   const [chatInput, setChatInput] = useState('');
   const [showChat, setShowChat] = useState(false);
@@ -201,21 +202,21 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
     };
   }, [roomId, userName, createPeerConnection, localStream]);
 
-  // Update peer connections when local stream changes
+  // Update peer connections when local stream changes (only if not screen sharing)
   useEffect(() => {
-    if (localStream) {
+    if (localStream && !isScreenSharing) {
       peerConnectionsRef.current.forEach(({ peerConnection }) => {
         localStream.getTracks().forEach(track => {
           const sender = peerConnection.getSenders().find(s => s.track?.kind === track.kind);
           if (sender) {
-            sender.replaceTrack(track);
+            sender.replaceTrack(track).catch(err => console.error('Error replacing track:', err));
           } else {
             peerConnection.addTrack(track, localStream);
           }
         });
       });
     }
-  }, [localStream]);
+  }, [localStream, isScreenSharing]);
 
   const toggleVideo = () => {
     if (localStream) {
@@ -242,47 +243,112 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
   const toggleScreenShare = async () => {
     if (!isScreenSharing) {
       try {
-        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-        const videoTrack = screenStream.getVideoTracks()[0];
-        
-        // Replace video track in all peer connections
-        peerConnectionsRef.current.forEach(({ peerConnection }) => {
-          const sender = peerConnection.getSenders().find(s => s.track?.kind === 'video');
-          if (sender) {
-            sender.replaceTrack(videoTrack);
-          }
+        // Request screen share
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({ 
+          video: { cursor: 'always' } as MediaTrackConstraints,
+          audio: true 
         });
+        
+        const videoTrack = screenStream.getVideoTracks()[0];
+        const audioTrack = screenStream.getAudioTracks()[0];
+        
+        if (!videoTrack) {
+          throw new Error('No video track in screen stream');
+        }
+
+        // Store screen stream reference
+        screenStreamRef.current = screenStream;
+
+        // Replace video track in all peer connections
+        const replacePromises = Array.from(peerConnectionsRef.current.entries()).map(
+          async ([socketId, { peerConnection }]) => {
+            const sender = peerConnection.getSenders().find(s => s.track?.kind === 'video');
+            if (sender) {
+              try {
+                await sender.replaceTrack(videoTrack);
+                console.log(`Replaced video track for ${socketId}`);
+              } catch (err) {
+                console.error(`Error replacing track for ${socketId}:`, err);
+              }
+            } else {
+              // Add track if sender doesn't exist
+              peerConnection.addTrack(videoTrack, screenStream);
+            }
+          }
+        );
+
+        // Also replace/add audio track if available
+        if (audioTrack) {
+          Array.from(peerConnectionsRef.current.entries()).forEach(([socketId, { peerConnection }]) => {
+            const sender = peerConnection.getSenders().find(s => s.track?.kind === 'audio');
+            if (sender) {
+              sender.replaceTrack(audioTrack).catch(err => 
+                console.error(`Error replacing audio track for ${socketId}:`, err)
+              );
+            } else {
+              peerConnection.addTrack(audioTrack, screenStream);
+            }
+          });
+        }
+
+        await Promise.all(replacePromises);
 
         // Update local video
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = screenStream;
         }
 
-        // Handle screen share end
+        // Handle screen share end (user stops sharing)
         videoTrack.onended = () => {
+          console.log('Screen share ended by user');
+          if (screenStreamRef.current) {
+            screenStreamRef.current.getTracks().forEach(track => track.stop());
+            screenStreamRef.current = null;
+          }
           toggleScreenShare();
         };
 
         setIsScreenSharing(true);
+        console.log('Screen sharing started');
       } catch (err) {
         console.error('Error sharing screen:', err);
+        alert('Could not share screen. Please check permissions and try again.');
+        setIsScreenSharing(false);
       }
     } else {
       // Stop screen share and resume camera
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach(track => track.stop());
+        screenStreamRef.current = null;
+      }
+
       if (localStream) {
         const videoTrack = localStream.getVideoTracks()[0];
-        peerConnectionsRef.current.forEach(({ peerConnection }) => {
-          const sender = peerConnection.getSenders().find(s => s.track?.kind === 'video');
-          if (sender && videoTrack) {
-            sender.replaceTrack(videoTrack);
-          }
-        });
+        if (videoTrack) {
+          // Replace video track back to camera in all peer connections
+          const replacePromises = Array.from(peerConnectionsRef.current.entries()).map(
+            async ([socketId, { peerConnection }]) => {
+              const sender = peerConnection.getSenders().find(s => s.track?.kind === 'video');
+              if (sender) {
+                try {
+                  await sender.replaceTrack(videoTrack);
+                  console.log(`Restored camera track for ${socketId}`);
+                } catch (err) {
+                  console.error(`Error restoring track for ${socketId}:`, err);
+                }
+              }
+            }
+          );
+
+          await Promise.all(replacePromises);
+        }
 
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = localStream;
         }
-        setIsScreenSharing(false);
       }
+      setIsScreenSharing(false);
+      console.log('Screen sharing stopped, camera resumed');
     }
   };
 
@@ -316,6 +382,7 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
               muted
               playsInline
               className="video-element"
+              key={isScreenSharing ? 'screen' : 'camera'}
             />
             <div className="video-label">
               {userName} (You)
