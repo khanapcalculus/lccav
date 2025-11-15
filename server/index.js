@@ -8,15 +8,59 @@ const app = express();
 const server = http.createServer(app);
 
 // Configure CORS for Socket.io
+const allowedOrigins = process.env.CLIENT_URL 
+  ? [process.env.CLIENT_URL, process.env.CLIENT_URL.replace(/\/$/, '')] // Allow with and without trailing slash
+  : ["*"];
+
 const io = socketIo(server, {
   cors: {
-    origin: process.env.CLIENT_URL || "*",
+    origin: function (origin, callback) {
+      // Allow requests with no origin (like mobile apps or curl requests)
+      if (!origin) return callback(null, true);
+      
+      // Check if origin matches allowed origins
+      const isAllowed = allowedOrigins.some(allowed => {
+        if (allowed === "*") return true;
+        // Allow exact match or origin that starts with the allowed URL
+        return origin === allowed || origin.startsWith(allowed);
+      });
+      
+      if (isAllowed) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     methods: ["GET", "POST"],
     credentials: true
   }
 });
 
-app.use(cors());
+// Configure CORS for Express
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = process.env.CLIENT_URL 
+      ? [process.env.CLIENT_URL, process.env.CLIENT_URL.replace(/\/$/, '')]
+      : ["*"];
+    
+    const isAllowed = allowedOrigins.some(allowed => {
+      if (allowed === "*") return true;
+      return origin === allowed || origin.startsWith(allowed);
+    });
+    
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // Store rooms and their participants
