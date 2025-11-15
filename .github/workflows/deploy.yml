@@ -42,4 +42,5 @@ jobs:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./client/build
         cname: ''
+        force_orphan: true
 
