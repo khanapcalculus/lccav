@@ -59,10 +59,11 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
   const createPeerConnection = useCallback((socketId: string): RTCPeerConnection => {
     const peerConnection = new RTCPeerConnection(STUN_SERVERS);
 
-    // Add local stream tracks
-    if (localStream) {
-      localStream.getTracks().forEach(track => {
-        peerConnection.addTrack(track, localStream);
+    // Add local stream tracks (use ref to get current stream)
+    const currentStream = localStreamRef.current;
+    if (currentStream) {
+      currentStream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, currentStream);
       });
     }
 
@@ -87,12 +88,24 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
     };
 
     return peerConnection;
-  }, [localStream, STUN_SERVERS]);
+  }, [STUN_SERVERS]); // Removed localStream dependency - use ref instead
 
   useEffect(() => {
     // Initialize socket connection (only once)
+    // Don't recreate if socket already exists and is connected
+    if (socketRef.current && socketRef.current.connected) {
+      console.log('Socket already connected, skipping reconnection');
+      return;
+    }
+
     const serverUrl = getServerUrl();
     console.log('Connecting to server:', serverUrl);
+    
+    // Disconnect existing socket if any
+    if (socketRef.current) {
+      socketRef.current.disconnect();
+    }
+    
     socketRef.current = io(serverUrl, getSocketOptions());
 
     const socket = socketRef.current;
@@ -293,9 +306,12 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
       currentConnections.forEach(({ peerConnection }) => {
         peerConnection.close();
       });
-      socket.disconnect();
+      if (socket && socket.connected) {
+        socket.disconnect();
+      }
     };
-  }, [roomId, userName, createPeerConnection]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId, userName]); // Removed createPeerConnection to prevent re-runs
 
   // Update peer connections when local stream becomes available
   useEffect(() => {
