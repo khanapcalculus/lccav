@@ -69,12 +69,28 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
 
     // Handle remote stream
     peerConnection.ontrack = (event) => {
+      console.log('📹 Received remote track from', socketId, event.track.kind);
       const [remoteStream] = event.streams;
-      setRemoteStreams(prev => {
-        const newMap = new Map(prev);
-        newMap.set(socketId, remoteStream);
-        return newMap;
-      });
+      if (remoteStream) {
+        console.log('✅ Setting remote stream for', socketId, 'Tracks:', remoteStream.getTracks().map(t => t.kind));
+        setRemoteStreams(prev => {
+          const newMap = new Map(prev);
+          newMap.set(socketId, remoteStream);
+          return newMap;
+        });
+      }
+    };
+
+    // Log connection state changes
+    peerConnection.onconnectionstatechange = () => {
+      console.log(`🔗 Peer connection state for ${socketId}:`, peerConnection.connectionState);
+      if (peerConnection.connectionState === 'connected') {
+        console.log('✅ Peer connection established with', socketId);
+      }
+    };
+
+    peerConnection.oniceconnectionstatechange = () => {
+      console.log(`🧊 ICE connection state for ${socketId}:`, peerConnection.iceConnectionState);
     };
 
     // Handle ICE candidates
@@ -184,10 +200,14 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
           });
         }
 
-        // Create offer
+        // Create offer with audio/video
         try {
-          const offer = await peerConnection.createOffer();
+          const offer = await peerConnection.createOffer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: true
+          });
           await peerConnection.setLocalDescription(offer);
+          console.log('📤 Sending offer to existing user', user.socketId);
           socket.emit('offer', {
             target: user.socketId,
             offer: offer
@@ -219,10 +239,14 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
         });
       }
 
-      // Create offer
+      // Create offer with audio/video
       try {
-        const offer = await peerConnection.createOffer();
+        const offer = await peerConnection.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: true
+        });
         await peerConnection.setLocalDescription(offer);
+        console.log('📤 Sending offer to new user', user.socketId);
         socket.emit('offer', {
           target: user.socketId,
           offer: offer
@@ -253,8 +277,12 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
       try {
         await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
 
-        const answer = await peerConnection.createAnswer();
+        const answer = await peerConnection.createAnswer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: true
+        });
         await peerConnection.setLocalDescription(answer);
+        console.log('📥 Sending answer to', data.sender);
         socket.emit('answer', {
           target: data.sender,
           answer: answer
@@ -522,10 +550,20 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
                 <video
                   autoPlay
                   playsInline
+                  muted={false}
                   className="video-element"
                   ref={(videoElement) => {
-                    if (videoElement && videoElement.srcObject !== stream) {
-                      videoElement.srcObject = stream;
+                    if (videoElement) {
+                      if (videoElement.srcObject !== stream) {
+                        console.log('🎥 Setting remote video srcObject for', socketId);
+                        videoElement.srcObject = stream;
+                      }
+                      // Ensure audio is enabled
+                      videoElement.muted = false;
+                      // Play the video
+                      videoElement.play().catch(err => {
+                        console.error('Error playing remote video:', err);
+                      });
                     }
                   }}
                 />
