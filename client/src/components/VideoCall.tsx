@@ -59,13 +59,8 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
   const createPeerConnection = useCallback((socketId: string): RTCPeerConnection => {
     const peerConnection = new RTCPeerConnection(STUN_SERVERS);
 
-    // Add local stream tracks (use ref to get current stream)
-    const currentStream = localStreamRef.current;
-    if (currentStream) {
-      currentStream.getTracks().forEach(track => {
-        peerConnection.addTrack(track, currentStream);
-      });
-    }
+    // Don't add tracks here - we'll add them explicitly before creating offers
+    // This ensures tracks are added at the right time
 
     // Handle remote stream
     peerConnection.ontrack = (event) => {
@@ -205,15 +200,18 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
       
       for (const user of users) {
         const peerConnection = createPeerConnection(user.socketId);
-        peerConnectionsRef.current.set(user.socketId, { peerConnection });
-
-        // Add all tracks from local stream
+        
+        // Add all tracks from local stream BEFORE storing the connection
         const tracks = currentStream.getTracks();
         console.log(`📤 Adding ${tracks.length} tracks to peer connection for ${user.socketId}`);
         tracks.forEach(track => {
           if (track.enabled) {
-            peerConnection.addTrack(track, currentStream!);
-            console.log(`  ✅ Added ${track.kind} track (enabled: ${track.enabled})`);
+            try {
+              peerConnection.addTrack(track, currentStream!);
+              console.log(`  ✅ Added ${track.kind} track (enabled: ${track.enabled}, id: ${track.id})`);
+            } catch (err) {
+              console.error(`  ❌ Error adding ${track.kind} track:`, err);
+            }
           } else {
             console.warn(`  ⚠️ Skipping disabled ${track.kind} track`);
           }
@@ -221,16 +219,24 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
 
         // Verify tracks were added
         const senders = peerConnection.getSenders();
-        console.log(`📊 Peer connection has ${senders.length} senders:`, senders.map(s => s.track?.kind || 'no track'));
+        console.log(`📊 Peer connection has ${senders.length} senders:`, senders.map(s => s.track ? `${s.track.kind} (${s.track.id})` : 'no track'));
 
-        // Create offer with audio/video
+        // Store connection AFTER tracks are added
+        peerConnectionsRef.current.set(user.socketId, { peerConnection });
+
+        // Create offer with audio/video AFTER tracks are added
         try {
           const offer = await peerConnection.createOffer({
             offerToReceiveAudio: true,
             offerToReceiveVideo: true
           });
           await peerConnection.setLocalDescription(offer);
-          console.log('📤 Sending offer to existing user', user.socketId);
+          
+          // Verify offer has media
+          const offerHasAudio = offer.sdp?.includes('m=audio');
+          const offerHasVideo = offer.sdp?.includes('m=video');
+          console.log(`📤 Sending offer to existing user ${user.socketId} (audio: ${offerHasAudio}, video: ${offerHasVideo})`);
+          
           socket.emit('offer', {
             target: user.socketId,
             offer: offer
@@ -260,15 +266,18 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
       }
 
       const peerConnection = createPeerConnection(user.socketId);
-      peerConnectionsRef.current.set(user.socketId, { peerConnection });
 
-      // Add all tracks from local stream
+      // Add all tracks from local stream BEFORE storing
       const tracks = currentStream.getTracks();
       console.log(`📤 Adding ${tracks.length} tracks to peer connection for new user ${user.socketId}`);
       tracks.forEach(track => {
         if (track.enabled) {
-          peerConnection.addTrack(track, currentStream!);
-          console.log(`  ✅ Added ${track.kind} track (enabled: ${track.enabled})`);
+          try {
+            peerConnection.addTrack(track, currentStream!);
+            console.log(`  ✅ Added ${track.kind} track (enabled: ${track.enabled}, id: ${track.id})`);
+          } catch (err) {
+            console.error(`  ❌ Error adding ${track.kind} track:`, err);
+          }
         } else {
           console.warn(`  ⚠️ Skipping disabled ${track.kind} track`);
         }
@@ -276,16 +285,24 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
 
       // Verify tracks were added
       const senders = peerConnection.getSenders();
-      console.log(`📊 Peer connection has ${senders.length} senders:`, senders.map(s => s.track?.kind || 'no track'));
+      console.log(`📊 Peer connection has ${senders.length} senders:`, senders.map(s => s.track ? `${s.track.kind} (${s.track.id})` : 'no track'));
 
-      // Create offer with audio/video
+      // Store connection AFTER tracks are added
+      peerConnectionsRef.current.set(user.socketId, { peerConnection });
+
+      // Create offer with audio/video AFTER tracks are added
       try {
         const offer = await peerConnection.createOffer({
           offerToReceiveAudio: true,
           offerToReceiveVideo: true
         });
         await peerConnection.setLocalDescription(offer);
-        console.log('📤 Sending offer to new user', user.socketId);
+        
+        // Verify offer has media
+        const offerHasAudio = offer.sdp?.includes('m=audio');
+        const offerHasVideo = offer.sdp?.includes('m=video');
+        console.log(`📤 Sending offer to new user ${user.socketId} (audio: ${offerHasAudio}, video: ${offerHasVideo})`);
+        
         socket.emit('offer', {
           target: user.socketId,
           offer: offer
@@ -305,15 +322,19 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
 
       const peerConnection = createPeerConnection(data.sender);
       
-      // Add local stream tracks if available
+      // Add local stream tracks if available BEFORE setting remote description
       const currentStream = localStreamRef.current;
       if (currentStream) {
         const tracks = currentStream.getTracks();
         console.log(`📤 Adding ${tracks.length} tracks to peer connection for ${data.sender}`);
         tracks.forEach(track => {
           if (track.enabled) {
-            peerConnection.addTrack(track, currentStream);
-            console.log(`  ✅ Added ${track.kind} track (enabled: ${track.enabled})`);
+            try {
+              peerConnection.addTrack(track, currentStream);
+              console.log(`  ✅ Added ${track.kind} track (enabled: ${track.enabled}, id: ${track.id})`);
+            } catch (err) {
+              console.error(`  ❌ Error adding ${track.kind} track:`, err);
+            }
           } else {
             console.warn(`  ⚠️ Skipping disabled ${track.kind} track`);
           }
@@ -321,7 +342,7 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
 
         // Verify tracks were added
         const senders = peerConnection.getSenders();
-        console.log(`📊 Peer connection has ${senders.length} senders:`, senders.map(s => s.track?.kind || 'no track'));
+        console.log(`📊 Peer connection has ${senders.length} senders:`, senders.map(s => s.track ? `${s.track.kind} (${s.track.id})` : 'no track'));
       } else {
         console.warn('⚠️ No local stream available when handling offer');
       }
@@ -334,7 +355,12 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
           offerToReceiveVideo: true
         });
         await peerConnection.setLocalDescription(answer);
-        console.log('📥 Sending answer to', data.sender);
+        
+        // Verify answer has media
+        const answerHasAudio = answer.sdp?.includes('m=audio');
+        const answerHasVideo = answer.sdp?.includes('m=video');
+        console.log(`📥 Sending answer to ${data.sender} (audio: ${answerHasAudio}, video: ${answerHasVideo})`);
+        
         socket.emit('answer', {
           target: data.sender,
           answer: answer
