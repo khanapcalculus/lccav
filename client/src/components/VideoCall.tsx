@@ -28,6 +28,7 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
   const socketRef = useRef<Socket | null>(null);
   const peerConnectionsRef = useRef<Map<string, PeerConnection>>(new Map());
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
   const userIdRef = useRef<string>(`user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
 
   // STUN servers configuration (constant, moved outside component logic)
@@ -77,7 +78,7 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
   }, [localStream, STUN_SERVERS]);
 
   useEffect(() => {
-    // Initialize socket connection
+    // Initialize socket connection (only once)
     const serverUrl = getServerUrl();
     socketRef.current = io(serverUrl);
 
@@ -88,6 +89,7 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
     // Get user media
     navigator.mediaDevices.getUserMedia({ video: true, audio: true })
       .then(stream => {
+        localStreamRef.current = stream;
         setLocalStream(stream);
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
@@ -102,20 +104,40 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
     socket.emit('join-room', roomId, userIdRef.current, userName);
 
     // Handle existing users
-    socket.on('existing-users', (users: Array<{userId: string, userName: string, socketId: string}>) => {
+    socket.on('existing-users', async (users: Array<{userId: string, userName: string, socketId: string}>) => {
       setParticipants(users);
-      users.forEach(async (user) => {
+      
+      // Wait for stream if not ready
+      let currentStream = localStreamRef.current;
+      if (!currentStream) {
+        // Wait a bit for stream to be obtained
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        currentStream = localStreamRef.current;
+      }
+      
+      for (const user of users) {
         const peerConnection = createPeerConnection(user.socketId);
         peerConnectionsRef.current.set(user.socketId, { peerConnection });
 
+        // Wait for local stream before creating offer
+        if (currentStream) {
+          currentStream.getTracks().forEach(track => {
+            peerConnection.addTrack(track, currentStream!);
+          });
+        }
+
         // Create offer
-        const offer = await peerConnection.createOffer();
-        await peerConnection.setLocalDescription(offer);
-        socket.emit('offer', {
-          target: user.socketId,
-          offer: offer
-        });
-      });
+        try {
+          const offer = await peerConnection.createOffer();
+          await peerConnection.setLocalDescription(offer);
+          socket.emit('offer', {
+            target: user.socketId,
+            offer: offer
+          });
+        } catch (err) {
+          console.error('Error creating offer for', user.socketId, err);
+        }
+      }
     });
 
     // Handle new user joined
@@ -125,28 +147,66 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
       const peerConnection = createPeerConnection(user.socketId);
       peerConnectionsRef.current.set(user.socketId, { peerConnection });
 
+      // Wait for local stream
+      let currentStream = localStreamRef.current;
+      if (!currentStream) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        currentStream = localStreamRef.current;
+      }
+
+      // Add tracks if stream is available
+      if (currentStream) {
+        currentStream.getTracks().forEach(track => {
+          peerConnection.addTrack(track, currentStream!);
+        });
+      }
+
       // Create offer
-      const offer = await peerConnection.createOffer();
-      await peerConnection.setLocalDescription(offer);
-      socket.emit('offer', {
-        target: user.socketId,
-        offer: offer
-      });
+      try {
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        socket.emit('offer', {
+          target: user.socketId,
+          offer: offer
+        });
+      } catch (err) {
+        console.error('Error creating offer for', user.socketId, err);
+      }
     });
 
     // Handle offer
     socket.on('offer', async (data: {offer: RTCSessionDescriptionInit, sender: string}) => {
+      // Check if connection already exists
+      if (peerConnectionsRef.current.has(data.sender)) {
+        console.log('Peer connection already exists for', data.sender);
+        return;
+      }
+
       const peerConnection = createPeerConnection(data.sender);
-      await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+      
+      // Add local stream tracks if available
+      const currentStream = localStreamRef.current;
+      if (currentStream) {
+        currentStream.getTracks().forEach(track => {
+          peerConnection.addTrack(track, currentStream);
+        });
+      }
 
-      const answer = await peerConnection.createAnswer();
-      await peerConnection.setLocalDescription(answer);
-      socket.emit('answer', {
-        target: data.sender,
-        answer: answer
-      });
+      try {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
 
-      peerConnectionsRef.current.set(data.sender, { peerConnection });
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        socket.emit('answer', {
+          target: data.sender,
+          answer: answer
+        });
+
+        peerConnectionsRef.current.set(data.sender, { peerConnection });
+      } catch (err) {
+        console.error('Error handling offer from', data.sender, err);
+        peerConnection.close();
+      }
     });
 
     // Handle answer
@@ -189,28 +249,33 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
 
     return () => {
       // Cleanup - capture current values
-      const currentStream = localStream;
+      const currentStream = localStreamRef.current;
       const currentConnections = connectionsRef.current;
       
       if (currentStream) {
         currentStream.getTracks().forEach(track => track.stop());
+        localStreamRef.current = null;
       }
       currentConnections.forEach(({ peerConnection }) => {
         peerConnection.close();
       });
       socket.disconnect();
     };
-  }, [roomId, userName, createPeerConnection, localStream]);
+  }, [roomId, userName, createPeerConnection]);
 
-  // Update peer connections when local stream changes (only if not screen sharing)
+  // Update peer connections when local stream becomes available
   useEffect(() => {
     if (localStream && !isScreenSharing) {
-      peerConnectionsRef.current.forEach(({ peerConnection }) => {
+      // Add tracks to existing peer connections that don't have them
+      peerConnectionsRef.current.forEach(({ peerConnection }, socketId) => {
+        const senders = peerConnection.getSenders();
+        const hasVideo = senders.some(s => s.track?.kind === 'video');
+        const hasAudio = senders.some(s => s.track?.kind === 'audio');
+
         localStream.getTracks().forEach(track => {
-          const sender = peerConnection.getSenders().find(s => s.track?.kind === track.kind);
-          if (sender) {
-            sender.replaceTrack(track).catch(err => console.error('Error replacing track:', err));
-          } else {
+          if (track.kind === 'video' && !hasVideo) {
+            peerConnection.addTrack(track, localStream);
+          } else if (track.kind === 'audio' && !hasAudio) {
             peerConnection.addTrack(track, localStream);
           }
         });
@@ -382,7 +447,6 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
               muted
               playsInline
               className="video-element"
-              key={isScreenSharing ? 'screen' : 'camera'}
             />
             <div className="video-label">
               {userName} (You)
