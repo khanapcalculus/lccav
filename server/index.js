@@ -8,8 +8,21 @@ const app = express();
 const server = http.createServer(app);
 
 // Configure CORS for Socket.io
+const getBaseUrl = (url) => {
+  try {
+    const urlObj = new URL(url);
+    return `${urlObj.protocol}//${urlObj.host}`;
+  } catch {
+    return url;
+  }
+};
+
 const allowedOrigins = process.env.CLIENT_URL 
-  ? [process.env.CLIENT_URL, process.env.CLIENT_URL.replace(/\/$/, '')] // Allow with and without trailing slash
+  ? [
+      process.env.CLIENT_URL,
+      process.env.CLIENT_URL.replace(/\/$/, ''), // Without trailing slash
+      getBaseUrl(process.env.CLIENT_URL) // Base domain only
+    ]
   : ["*"];
 
 const io = socketIo(server, {
@@ -21,13 +34,17 @@ const io = socketIo(server, {
       // Check if origin matches allowed origins
       const isAllowed = allowedOrigins.some(allowed => {
         if (allowed === "*") return true;
-        // Allow exact match or origin that starts with the allowed URL
-        return origin === allowed || origin.startsWith(allowed);
+        // Allow exact match, or if origin is base of allowed URL, or vice versa
+        const originBase = getBaseUrl(origin);
+        const allowedBase = getBaseUrl(allowed);
+        return origin === allowed || origin.startsWith(allowed) || 
+               originBase === allowedBase || originBase === allowed || origin === allowedBase;
       });
       
       if (isAllowed) {
         callback(null, true);
       } else {
+        console.log('CORS blocked:', origin, 'Allowed:', allowedOrigins);
         callback(new Error('Not allowed by CORS'));
       }
     },
@@ -43,17 +60,25 @@ const corsOptions = {
     if (!origin) return callback(null, true);
     
     const allowedOrigins = process.env.CLIENT_URL 
-      ? [process.env.CLIENT_URL, process.env.CLIENT_URL.replace(/\/$/, '')]
+      ? [
+          process.env.CLIENT_URL,
+          process.env.CLIENT_URL.replace(/\/$/, ''),
+          getBaseUrl(process.env.CLIENT_URL)
+        ]
       : ["*"];
     
     const isAllowed = allowedOrigins.some(allowed => {
       if (allowed === "*") return true;
-      return origin === allowed || origin.startsWith(allowed);
+      const originBase = getBaseUrl(origin);
+      const allowedBase = getBaseUrl(allowed);
+      return origin === allowed || origin.startsWith(allowed) || 
+             originBase === allowedBase || originBase === allowed || origin === allowedBase;
     });
     
     if (isAllowed) {
       callback(null, true);
     } else {
+      console.log('CORS blocked:', origin, 'Allowed:', allowedOrigins);
       callback(new Error('Not allowed by CORS'));
     }
   },
