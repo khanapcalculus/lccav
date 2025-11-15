@@ -36,23 +36,11 @@ jobs:
       env:
         REACT_APP_SERVER_URL: ${{ secrets.REACT_APP_SERVER_URL || 'http://localhost:5000' }}
         
-    - name: Create docs folder with build files
-      run: |
-        pwd
-        ls -la
-        mkdir -p docs
-        cp -r client/build/* docs/ || true
-        cp -r client/build/.[!.]* docs/ 2>/dev/null || true
-        echo "Contents of docs folder:"
-        ls -la docs/
-        echo "Verifying docs folder exists:"
-        test -d docs && echo "✅ docs folder exists" || echo "❌ docs folder missing"
-        
-    - name: Deploy to GitHub Pages
+    - name: Deploy to GitHub Pages (root)
       uses: peaceiris/actions-gh-pages@v3
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./docs
+        publish_dir: ./client/build
         cname: ''
-        force_orphan: false
+        force_orphan: true
 
