@@ -36,10 +36,11 @@ jobs:
       env:
         REACT_APP_SERVER_URL: ${{ secrets.REACT_APP_SERVER_URL || 'http://localhost:5000' }}
         
-    - name: Prepare docs folder
+    - name: Move build to docs
       run: |
-        mkdir -p docs
-        cp -r client/build/. docs/
+        mkdir docs
+        mv client/build/* docs/ 2>/dev/null || true
+        mv client/build/.* docs/ 2>/dev/null || true
         ls -la docs/
         
     - name: Deploy to GitHub Pages
