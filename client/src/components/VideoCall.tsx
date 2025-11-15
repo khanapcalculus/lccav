@@ -149,11 +149,17 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
     // Get user media
     navigator.mediaDevices.getUserMedia({ video: true, audio: true })
       .then(stream => {
+        console.log('✅ Got user media, tracks:', stream.getTracks().map(t => `${t.kind} (${t.enabled ? 'enabled' : 'disabled'})`));
         localStreamRef.current = stream;
         setLocalStream(stream);
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
         }
+        // Ensure all tracks are enabled
+        stream.getTracks().forEach(track => {
+          track.enabled = true;
+          console.log(`  ✅ ${track.kind} track enabled:`, track.enabled);
+        });
       })
       .catch(err => {
         console.error('Error accessing media devices:', err);
@@ -181,24 +187,41 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
     socket.on('existing-users', async (users: Array<{userId: string, userName: string, socketId: string}>) => {
       setParticipants(users);
       
-      // Wait for stream if not ready
+      // Wait for stream if not ready (wait up to 3 seconds)
       let currentStream = localStreamRef.current;
-      if (!currentStream) {
-        // Wait a bit for stream to be obtained
-        await new Promise(resolve => setTimeout(resolve, 1000));
+      let attempts = 0;
+      while (!currentStream && attempts < 30) {
+        await new Promise(resolve => setTimeout(resolve, 100));
         currentStream = localStreamRef.current;
+        attempts++;
       }
+      
+      if (!currentStream) {
+        console.error('❌ Local stream not available after waiting');
+        return;
+      }
+
+      console.log('✅ Local stream ready, tracks:', currentStream.getTracks().map(t => `${t.kind} (${t.enabled ? 'enabled' : 'disabled'})`));
       
       for (const user of users) {
         const peerConnection = createPeerConnection(user.socketId);
         peerConnectionsRef.current.set(user.socketId, { peerConnection });
 
-        // Wait for local stream before creating offer
-        if (currentStream) {
-          currentStream.getTracks().forEach(track => {
+        // Add all tracks from local stream
+        const tracks = currentStream.getTracks();
+        console.log(`📤 Adding ${tracks.length} tracks to peer connection for ${user.socketId}`);
+        tracks.forEach(track => {
+          if (track.enabled) {
             peerConnection.addTrack(track, currentStream!);
-          });
-        }
+            console.log(`  ✅ Added ${track.kind} track (enabled: ${track.enabled})`);
+          } else {
+            console.warn(`  ⚠️ Skipping disabled ${track.kind} track`);
+          }
+        });
+
+        // Verify tracks were added
+        const senders = peerConnection.getSenders();
+        console.log(`📊 Peer connection has ${senders.length} senders:`, senders.map(s => s.track?.kind || 'no track'));
 
         // Create offer with audio/video
         try {
@@ -222,22 +245,38 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
     socket.on('user-joined', async (user: {userId: string, userName: string, socketId: string}) => {
       setParticipants(prev => [...prev, user]);
       
+      // Wait for local stream
+      let currentStream = localStreamRef.current;
+      let attempts = 0;
+      while (!currentStream && attempts < 30) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        currentStream = localStreamRef.current;
+        attempts++;
+      }
+
+      if (!currentStream) {
+        console.error('❌ Local stream not available for new user');
+        return;
+      }
+
       const peerConnection = createPeerConnection(user.socketId);
       peerConnectionsRef.current.set(user.socketId, { peerConnection });
 
-      // Wait for local stream
-      let currentStream = localStreamRef.current;
-      if (!currentStream) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        currentStream = localStreamRef.current;
-      }
-
-      // Add tracks if stream is available
-      if (currentStream) {
-        currentStream.getTracks().forEach(track => {
+      // Add all tracks from local stream
+      const tracks = currentStream.getTracks();
+      console.log(`📤 Adding ${tracks.length} tracks to peer connection for new user ${user.socketId}`);
+      tracks.forEach(track => {
+        if (track.enabled) {
           peerConnection.addTrack(track, currentStream!);
-        });
-      }
+          console.log(`  ✅ Added ${track.kind} track (enabled: ${track.enabled})`);
+        } else {
+          console.warn(`  ⚠️ Skipping disabled ${track.kind} track`);
+        }
+      });
+
+      // Verify tracks were added
+      const senders = peerConnection.getSenders();
+      console.log(`📊 Peer connection has ${senders.length} senders:`, senders.map(s => s.track?.kind || 'no track'));
 
       // Create offer with audio/video
       try {
@@ -269,9 +308,22 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userName, onLeave }) => {
       // Add local stream tracks if available
       const currentStream = localStreamRef.current;
       if (currentStream) {
-        currentStream.getTracks().forEach(track => {
-          peerConnection.addTrack(track, currentStream);
+        const tracks = currentStream.getTracks();
+        console.log(`📤 Adding ${tracks.length} tracks to peer connection for ${data.sender}`);
+        tracks.forEach(track => {
+          if (track.enabled) {
+            peerConnection.addTrack(track, currentStream);
+            console.log(`  ✅ Added ${track.kind} track (enabled: ${track.enabled})`);
+          } else {
+            console.warn(`  ⚠️ Skipping disabled ${track.kind} track`);
+          }
         });
+
+        // Verify tracks were added
+        const senders = peerConnection.getSenders();
+        console.log(`📊 Peer connection has ${senders.length} senders:`, senders.map(s => s.track?.kind || 'no track'));
+      } else {
+        console.warn('⚠️ No local stream available when handling offer');
       }
 
       try {
