@@ -1,0 +1,13 @@
+{
+  "files": {
+    "main.css": "/lccav/static/css/main.b2a50732.css",
+    "main.js": "/lccav/static/js/main.3be09360.js",
+    "index.html": "/lccav/index.html",
+    "main.b2a50732.css.map": "/lccav/static/css/main.b2a50732.css.map",
+    "main.3be09360.js.map": "/lccav/static/js/main.3be09360.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.b2a50732.css",
+    "static/js/main.3be09360.js"
+  ]
+}
